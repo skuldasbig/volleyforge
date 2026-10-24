@@ -1,5 +1,9 @@
 # 🏐 VolleyForge
 
+<p align="center">
+  🇩🇪 <strong>Deutsch</strong> &nbsp;|&nbsp; 🇬🇧 <a href="README.en.md">English</a>
+</p>
+
 > **Die authentische 1-zu-1 Reimplementierung des Klassikers *Blobby Volley* (2000/2001) in modernem Rust.**  
 > *Genau das gleiche Feeling wie damals in der Kindheit.*
 

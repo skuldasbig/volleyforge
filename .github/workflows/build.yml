@@ -64,6 +64,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path "dist-win-${{ matrix.arch }}"
           Copy-Item "target/${{ matrix.target }}/release/volleyforge.exe" "dist-win-${{ matrix.arch }}/"
           if (Test-Path "README.md") { Copy-Item "README.md" "dist-win-${{ matrix.arch }}/" }
+          if (Test-Path "README.en.md") { Copy-Item "README.en.md" "dist-win-${{ matrix.arch }}/" }
           Compress-Archive -Path "dist-win-${{ matrix.arch }}/*" -DestinationPath "volleyforge-windows-${{ matrix.arch }}.zip" -Force
           Copy-Item "target/${{ matrix.target }}/release/volleyforge.exe" "volleyforge-windows-${{ matrix.arch }}.exe"
 
