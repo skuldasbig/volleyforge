@@ -19,26 +19,44 @@ pub enum NameTarget {
     HostAddress,
 }
 
+/// Where the name input returns to.
+///
+/// The two player names come from the settings screen, the game name from
+/// the host screen and the address from the client screen of the
+/// multiplayer menu.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum NameReturn {
+    /// The settings screen.
+    Settings,
+    /// The host screen of the multiplayer menu.
+    HostScreen,
+    /// The client screen of the multiplayer menu.
+    ClientScreen,
+}
+
 /// State of the name input dialog.
 #[derive(Clone, Debug)]
 pub struct NameInputState {
     pub target: NameTarget,
     pub buffer: String,
     pub max_len: usize,
+    /// The screen the dialog returns to.
+    pub return_to: NameReturn,
 }
 
 impl NameInputState {
     pub fn new(player: usize, current: &str) -> NameInputState {
-        let (target, max_len) = match player {
-            0 => (NameTarget::Player1, 12),
-            1 => (NameTarget::Player2, 12),
-            2 => (NameTarget::GameName, 12),
-            _ => (NameTarget::HostAddress, 20),
+        let (target, max_len, return_to) = match player {
+            0 => (NameTarget::Player1, 12, NameReturn::Settings),
+            1 => (NameTarget::Player2, 12, NameReturn::Settings),
+            2 => (NameTarget::GameName, 12, NameReturn::HostScreen),
+            _ => (NameTarget::HostAddress, 20, NameReturn::ClientScreen),
         };
         NameInputState {
             target,
             buffer: current.to_string(),
             max_len,
+            return_to,
         }
     }
 }
@@ -83,12 +101,17 @@ pub fn render_name_input(
         match key {
             egui::Key::Escape => {
                 info!("cancelled the name input");
-                return back(ctx);
+                return back(state);
             }
             egui::Key::Enter => {
                 info!(target = ?state.target, text = %state.buffer, "name confirmed");
-                apply(state, ctx);
-                return back(ctx);
+                // The application stores the text - the dialog does not know
+                // whether it belongs into the settings or into the
+                // multiplayer screens.
+                return Action::NameConfirmed {
+                    target: state.target,
+                    text: state.buffer.clone(),
+                };
             }
             egui::Key::Backspace => {
                 state.buffer.pop();
@@ -106,19 +129,17 @@ pub fn render_name_input(
 }
 
 /// Where the dialog returns to.
-fn back(ctx: &mut Ctx) -> Action {
-    let _ = ctx;
-    Action::Switch(Screen::Settings(
-        crate::screens::settings::SettingsState::default(),
-    ))
-}
-
-/// Store the typed text.
-fn apply(state: &NameInputState, ctx: &mut Ctx) {
-    match state.target {
-        NameTarget::Player1 => ctx.settings.names[0] = state.buffer.clone(),
-        NameTarget::Player2 => ctx.settings.names[1] = state.buffer.clone(),
-        NameTarget::GameName | NameTarget::HostAddress => {}
+fn back(state: &NameInputState) -> Action {
+    match state.return_to {
+        NameReturn::Settings => Action::Switch(Screen::Settings(
+            crate::screens::settings::SettingsState::default(),
+        )),
+        NameReturn::HostScreen => Action::Switch(Screen::Multiplayer(
+            crate::screens::multiplayer::MpState::host(),
+        )),
+        NameReturn::ClientScreen => Action::Switch(Screen::Multiplayer(
+            crate::screens::multiplayer::MpState::client(),
+        )),
     }
 }
 
@@ -208,5 +229,106 @@ fn key_to_char(key: egui::Key) -> Option<char> {
         egui::Key::Period => Some('.'),
         egui::Key::Minus => Some('-'),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::screens::multiplayer::MpScreen;
+
+    fn press(keys: &[egui::Key]) -> Input {
+        Input {
+            keys: keys.to_vec(),
+            mouse: (0, 0),
+            clicked: false,
+        }
+    }
+
+    /// The name of the session belongs to the host screen - not to the
+    /// settings menu.
+    #[test]
+    fn the_game_name_returns_to_the_host_screen() {
+        let assets = crate::assets::GameAssets::empty();
+        let font = crate::fonts::Font::from_groups(&[], &[]);
+        let mut settings = crate::settings::Settings::default();
+        let mut canvas = crate::canvas::Canvas::new();
+        let mut state = NameInputState::new(2, "");
+
+        {
+            let mut ctx = Ctx {
+                assets: &assets,
+                font: &font,
+                settings: &mut settings,
+            };
+            let action = render_name_input(
+                &mut state,
+                &mut canvas,
+                &mut ctx,
+                &press(&[egui::Key::G, egui::Key::A, egui::Key::M, egui::Key::E]),
+            );
+            assert!(
+                matches!(action, Action::None),
+                "the dialog stays open while typing"
+            );
+        }
+        {
+            let mut ctx = Ctx {
+                assets: &assets,
+                font: &font,
+                settings: &mut settings,
+            };
+            let action =
+                render_name_input(&mut state, &mut canvas, &mut ctx, &press(&[egui::Key::Enter]));
+            match action {
+                Action::NameConfirmed { target, text } => {
+                    assert_eq!(target, NameTarget::GameName);
+                    assert_eq!(text, "GAME");
+                }
+                other => panic!("expected a confirmed name, got {other:?}"),
+            }
+        }
+    }
+
+    /// Cancelling the name of the session goes back to the host screen.
+    #[test]
+    fn cancelling_the_game_name_returns_to_the_host_screen() {
+        let assets = crate::assets::GameAssets::empty();
+        let font = crate::fonts::Font::from_groups(&[], &[]);
+        let mut settings = crate::settings::Settings::default();
+        let mut canvas = crate::canvas::Canvas::new();
+        let mut state = NameInputState::new(2, "game");
+        let mut ctx = Ctx {
+            assets: &assets,
+            font: &font,
+            settings: &mut settings,
+        };
+        let action = render_name_input(&mut state, &mut canvas, &mut ctx, &press(&[egui::Key::Escape]));
+        match action {
+            Action::Switch(Screen::Multiplayer(mp)) => {
+                assert_eq!(mp.screen, MpScreen::Host);
+            }
+            other => panic!("expected the host screen, got {other:?}"),
+        }
+    }
+
+    /// The two player names still go into the settings.
+    #[test]
+    fn the_player_names_return_to_the_settings() {
+        let assets = crate::assets::GameAssets::empty();
+        let font = crate::fonts::Font::from_groups(&[], &[]);
+        let mut settings = crate::settings::Settings::default();
+        let mut canvas = crate::canvas::Canvas::new();
+        let mut state = NameInputState::new(0, "");
+        let mut ctx = Ctx {
+            assets: &assets,
+            font: &font,
+            settings: &mut settings,
+        };
+        let action = render_name_input(&mut state, &mut canvas, &mut ctx, &press(&[egui::Key::Enter]));
+        match action {
+            Action::NameConfirmed { target, .. } => assert_eq!(target, NameTarget::Player1),
+            other => panic!("expected a confirmed name, got {other:?}"),
+        }
     }
 }

@@ -48,6 +48,27 @@ pub enum Action {
     Switch(Screen),
     /// Start a local match.
     StartMatch,
+    /// Open a network session under the given name and wait for a guest.
+    StartHosting(String),
+    /// Look for the running sessions.
+    FindSessions,
+    /// Join the session at the given index of the session list.
+    JoinSession(usize),
+    /// Switch the control mode of the local player in the network menus.
+    ///
+    /// The original switches between keyboard and mouse with
+    /// `(mode + 1) & 1` (`BV_Menu_0044ABA8.c:171-178`); the computer
+    /// opponents are not offered in a network game.
+    CycleNetControl,
+    /// A name was confirmed in the name input dialog.
+    ///
+    /// The dialog does not know where the text belongs: the two player names
+    /// go into the settings, the game name and the host address into the
+    /// multiplayer screens. The application sorts it out.
+    NameConfirmed {
+        target: dialog::NameTarget,
+        text: String,
+    },
     /// Leave the application.
     Quit,
 }

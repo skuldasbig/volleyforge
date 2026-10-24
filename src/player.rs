@@ -23,11 +23,18 @@ use crate::log::{debug, info, trace, warn};
 /// The original knows five modes (`+0x978224`, `0..4`): keyboard, mouse and
 /// three computer opponents. The port collapses the three CPU levels into
 /// [`Control::Cpu`] plus [`Player::skill`].
+///
+/// A network match adds a sixth one: the original uses the mode `50`
+/// (`0x32`) for the player that is steered by the other computer
+/// (`BV_Menu_0044B8B4.c:122` and `BV_Menu_0044BC94.c:64`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Control {
     Keyboard,
     Mouse,
     Cpu,
+    /// Steered by the other computer: its input arrives over the network
+    /// (`Cmd::Input`) and is applied by the host.
+    Network,
 }
 
 /// Per-frame intent, exactly the three flags the original ships over the wire.

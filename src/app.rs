@@ -56,6 +56,33 @@ pub struct VolleyForge {
     pub loader: crate::assets::Loader,
     /// What the application is doing.
     pub phase: Phase,
+    /// The network session of a network match, if one is running.
+    ///
+    /// The host simulates the match and sends its state; the guest mirrors
+    /// it and sends its input. See [`crate::net`].
+    pub net: Option<crate::net::Session>,
+    /// The score the host sent last - the score packet is only sent when
+    /// something changed.
+    net_score_sent: Option<(u8, u8, u8, u32, bool)>,
+    /// The names of the two players: the local one and the one of the peer.
+    net_names: [String; 2],
+    /// The name of the hosted session.
+    ///
+    /// The original keeps it in the memory of the form (`+0x97CDD1`), so it
+    /// survives every screen - but not the program. The port does the same:
+    /// the field lives in the application, the screens only show it.
+    session_name: String,
+    /// The address of the host the guest wants to join (`HOST - IP:`).
+    host_address: String,
+    /// The control mode of the local player in the network menus:
+    /// 0 = keyboard, 1 = mouse.
+    ///
+    /// The original keeps it in `+0x97CDE0` (in the memory of the form, not
+    /// in `settings.dat`) and switches it with `(mode + 1) & 1`
+    /// (`BV_Menu_0044ABA8.c:171-178`).
+    net_control: usize,
+    /// When the guest searched the last time for running sessions.
+    net_last_discover: u64,
     #[cfg(target_arch = "wasm32")]
     pub web_assets: crate::web_assets::WebAssetManager,
 }
@@ -88,6 +115,13 @@ impl VolleyForge {
             last: Instant::now(),
             start: Instant::now(),
             saved_language,
+            net: None,
+            net_score_sent: None,
+            net_names: [String::new(), String::new()],
+            session_name: String::new(),
+            host_address: String::new(),
+            net_control: 0,
+            net_last_discover: 0,
             #[cfg(not(target_arch = "wasm32"))]
             loader: crate::assets::Loader::new(crate::pak::default_dir()),
             #[cfg(not(target_arch = "wasm32"))]
@@ -124,16 +158,476 @@ impl VolleyForge {
         while self.acc >= step {
             self.acc -= step;
             if matches!(self.screen, Screen::Game) {
-                let before = self.game.state;
-                self.game.step();
-                // A match that just ended goes into the statistics table.
-                if before != self.game.state {
-                    if let crate::rules::MatchState::Finished(winner) = self.game.state {
-                        self.record_match(winner);
+                // The guest does not simulate: the original's guest loop
+                // (`FUN_0044BF98`) never steps the physics, it only draws
+                // the state the host sends.
+                if !self.net_is_guest() {
+                    let before = self.game.state;
+                    self.game.step();
+                    // A match that just ended goes into the statistics table.
+                    if before != self.game.state {
+                        if let crate::rules::MatchState::Finished(winner) = self.game.state {
+                            self.record_match(winner);
+                        }
+                    }
+                    self.game.trace_frame(self.tick_ms());
+                }
+            }
+        }
+        self.net_send_score();
+    }
+
+    // -----------------------------------------------------------------------
+    // The network
+    // -----------------------------------------------------------------------
+
+    /// Do what a screen asked for.
+    ///
+    /// The screens are pure: they only say what should happen. The
+    /// application owns the socket and the match, so everything that changes
+    /// the state of the game happens here.
+    pub(crate) fn handle_action(&mut self, action: Action) {
+        match action {
+            Action::None => {}
+            Action::Switch(next) => {
+                info!(screen = next.name(), "screen changed");
+                // The original writes the 24 byte key block into
+                // `settings.dat`; the port persists the settings as soon as
+                // the key definition is done.
+                if matches!(&self.screen, Screen::KeyDef(_))
+                    && matches!(&next, Screen::Settings(_))
+                {
+                    self.save_settings();
+                }
+                self.screen = next;
+            }
+            Action::StartMatch => {
+                info!("starting a match");
+                self.game = Match::new(0x5EED_1234, None);
+                // The team colours and the control modes are settings of the
+                // original (`+0x97828B` / `+0x978224`), so the match has to
+                // start with what the player picked in the settings screen.
+                self.apply_settings_to_match();
+                self.screen = Screen::Game;
+            }
+            Action::StartHosting(name) => {
+                // The original opens a session with a random name ("game N")
+                // and waits for the other computer (`FUN_0044B8B4`).
+                let name = if name.trim().is_empty() {
+                    format!("game {}", crate::net::udp::now_ticks() % 1000)
+                } else {
+                    name
+                };
+                self.session_name = name.clone();
+                match crate::net::Session::host(name.clone(), crate::net::DEFAULT_PORT) {
+                    Ok(mut session) => {
+                        session.set_colour(self.settings.colors[0] as u8);
+                        let addr = session
+                            .local_addr()
+                            .map(|a| a.to_string())
+                            .unwrap_or_default();
+                        let published = session.name().to_string();
+                        self.net = Some(session);
+                        self.screen = Screen::Multiplayer(screens::multiplayer::MpState::waiting());
+                        info!(name = %published, %addr, "the session is open");
+                    }
+                    Err(e) => {
+                        crate::log::error!(
+                            error = %e,
+                            port = crate::net::DEFAULT_PORT,
+                            "the port is not free - no session can be opened"
+                        );
                     }
                 }
-                self.game.trace_frame(self.tick_ms());
             }
+            Action::FindSessions => {
+                // The original enumerates the running sessions here
+                // (`FUN_0044B530`); VolleyForge broadcasts a request.
+                if self.create_guest_session() {
+                    let sent = self.net.as_mut().map(|s| s.discover().is_ok()).unwrap_or(false);
+                    if !sent {
+                        warn!("the discovery broadcast failed");
+                    }
+                    self.screen = Screen::Multiplayer(screens::multiplayer::MpState::sessions());
+                    info!("the session list is searched");
+                }
+            }
+            Action::JoinSession(index) => {
+                let mut joined = false;
+                if let Some(session) = self.net.as_mut() {
+                    if let Some(found) = session.found.get(index).cloned() {
+                        match session.join(&found) {
+                            Ok(()) => {
+                                info!(host = %found.name, %found.addr, "the join request is sent");
+                                joined = true;
+                            }
+                            Err(e) => warn!(error = %e, "the join request failed"),
+                        }
+                    }
+                }
+                if joined {
+                    self.screen = Screen::Multiplayer(screens::multiplayer::MpState::waiting());
+                }
+            }
+            Action::CycleNetControl => {
+                // The original switches between keyboard and mouse:
+                // `(mode + 1) & 1` (`BV_Menu_0044ABA8.c:171-178`).
+                self.net_control = (self.net_control + 1) & 1;
+                info!(
+                    mode = if self.net_control == 0 { "keyboard" } else { "mouse" },
+                    "the control mode of the network game changed"
+                );
+            }
+            Action::NameConfirmed { target, text } => {
+                // The dialog only knows the text; where it belongs is decided
+                // here.
+                match target {
+                    crate::screens::dialog::NameTarget::Player1 => {
+                        self.settings.names[0] = text;
+                        self.screen = Screen::Settings(screens::settings::SettingsState::default());
+                    }
+                    crate::screens::dialog::NameTarget::Player2 => {
+                        self.settings.names[1] = text;
+                        self.screen = Screen::Settings(screens::settings::SettingsState::default());
+                    }
+                    crate::screens::dialog::NameTarget::GameName => {
+                        // Back to the host screen, with the new name. The
+                        // application keeps it, so it is still there after
+                        // the next match.
+                        self.session_name = text;
+                        let mut mp = screens::multiplayer::MpState::host();
+                        mp.game_name = self.session_name.clone();
+                        info!(name = %self.session_name, "the name of the session");
+                        self.screen = Screen::Multiplayer(mp);
+                    }
+                    crate::screens::dialog::NameTarget::HostAddress => {
+                        // The original's client screen asks for the host's IP
+                        // (`HOST - IP:`) and connects to it **directly**,
+                        // without asking the lobby first.
+                        self.host_address = text.trim().to_string();
+                        let address = self.host_address.clone();
+                        let mut mp = screens::multiplayer::MpState::client();
+                        mp.host_address = address.clone();
+                        self.screen = Screen::Multiplayer(mp);
+                        match crate::net::parse_address(&address) {
+                            Ok(addr) => {
+                                if self.create_guest_session() {
+                                    let sent = self
+                                        .net
+                                        .as_mut()
+                                        .map(|s| s.join_addr(addr).is_ok())
+                                        .unwrap_or(false);
+                                    if sent {
+                                        info!(%addr, "the join request is sent");
+                                        self.screen = Screen::Multiplayer(
+                                            screens::multiplayer::MpState::waiting(),
+                                        );
+                                    } else {
+                                        warn!(%addr, "the join request failed");
+                                    }
+                                }
+                            }
+                            Err(e) => warn!(error = %e, address = %address, "the address is not usable"),
+                        }
+                    }
+                }
+            }
+            Action::Quit => {
+                info!("quitting");
+                self.save_settings();
+                std::process::exit(0);
+            }
+        }
+    }
+
+    /// Keep the name of the session and the address of the host in the
+    /// multiplayer screens.
+    ///
+    /// The original keeps both in the memory of the form (`+0x97CDD1` for the
+    /// name of the session), so they survive every screen - but not the
+    /// program. The port does the same: the fields live in the application,
+    /// the screens only show them.
+    fn sync_multiplayer_fields(&mut self) {
+        let kind = match &self.screen {
+            Screen::Multiplayer(mp) => Some(mp.screen),
+            _ => None,
+        };
+        match kind {
+            Some(crate::screens::multiplayer::MpScreen::Host) => {
+                if self.session_name.is_empty() {
+                    // The original fills an empty name with a random
+                    // "game N" (`BV_Menu_0044ABA8.c:57-64`).
+                    let n = crate::rules::Rng::new(self.tick_ms() as u32 | 1).below(100);
+                    self.session_name = format!("game {n}");
+                    info!(name = %self.session_name, "the session gets a random name");
+                }
+                if let Screen::Multiplayer(mp) = &mut self.screen {
+                    mp.game_name = self.session_name.clone();
+                    mp.control = self.net_control;
+                }
+            }
+            Some(crate::screens::multiplayer::MpScreen::Client) => {
+                if let Screen::Multiplayer(mp) = &mut self.screen {
+                    mp.host_address = self.host_address.clone();
+                    mp.control = self.net_control;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Create the session of the guest and remember it.
+    fn create_guest_session(&mut self) -> bool {
+        match crate::net::Session::guest(crate::net::DEFAULT_PORT) {
+            Ok(mut session) => {
+                session.set_name(self.settings.display_name(1));
+                session.set_colour(self.settings.colors[1] as u8);
+                self.net = Some(session);
+                true
+            }
+            Err(e) => {
+                crate::log::error!(error = %e, "no socket for the session");
+                false
+            }
+        }
+    }
+
+    /// Are we the host of a network match?
+    pub(crate) fn net_is_host(&self) -> bool {
+        self.net
+            .as_ref()
+            .map(|s| s.role() == crate::net::Role::Host)
+            .unwrap_or(false)
+    }
+
+    /// Are we the guest of a network match?
+    pub(crate) fn net_is_guest(&self) -> bool {
+        self.net
+            .as_ref()
+            .map(|s| s.role() == crate::net::Role::Guest)
+            .unwrap_or(false)
+    }
+
+    /// Read the network and apply what arrived.
+    ///
+    /// The original polls DirectPlay inside the rally handler
+    /// (`FUN_00443E8`) and inside the guest's frame loop
+    /// (`FUN_0044BF98`); the port polls the socket once per drawn frame.
+    pub(crate) fn net_tick(&mut self) {
+        let events = match self.net.as_mut() {
+            Some(session) => session.poll(),
+            None => Vec::new(),
+        };
+        for event in events {
+            match event {
+                crate::net::Event::Found(_) => {
+                    // The list of the found sessions is shown by the screen.
+                }
+                crate::net::Event::Join { name, .. } => {
+                    // The host: the guest is there, the match starts.
+                    info!(guest = %name, "the guest joined - the match starts");
+                    self.net_names[1] = name;
+                    self.start_network_match(0);
+                }
+                crate::net::Event::Welcome {
+                    slot,
+                    host_colour,
+                    host_name,
+                } => {
+                    // The guest: the host took us, the match starts.
+                    info!(host = %host_name, "the host took us - the match starts");
+                    self.net_names[0] = host_name;
+                    self.game.players[0].colour = host_colour as usize;
+                    self.start_network_match(slot);
+                }
+                crate::net::Event::State(state) => {
+                    self.game.apply_net_state(&state);
+                    if let Some(session) = self.net.as_ref() {
+                        if let Some(ping) = session.ping() {
+                            crate::log::debug!(ms = ping.as_millis() as u64, "round trip time");
+                        }
+                    }
+                }
+                crate::net::Event::Score {
+                    p0, p1, server, over, ..
+                } => {
+                    self.game.apply_net_score(p0, p1, server, over);
+                }
+                crate::net::Event::Input { jump, left, right } => {
+                    // The host applies the guest's input to the guest's blob
+                    // (`BV_Phys_H_443e8.c:233-237`).
+                    self.game.players[1].intent = Intent {
+                        jump,
+                        left,
+                        right,
+                    };
+                }
+                crate::net::Event::Sound(index) => {
+                    crate::sound::play_index(index as usize);
+                }
+                crate::net::Event::Colour { player, colour } => {
+                    self.game.players[player].colour = colour as usize;
+                }
+                crate::net::Event::Lost => {
+                    warn!("the connection is lost");
+                    self.net = None;
+                    self.screen = Screen::Menu(screens::menu::MenuState::default());
+                }
+            }
+        }
+
+        // The session list of the guest's screen.
+        if let Screen::Multiplayer(mp) = &mut self.screen {
+            if let Some(session) = self.net.as_ref() {
+                mp.sessions = session.found.iter().map(|s| s.name.clone()).collect();
+            }
+        }
+
+        // The guest repeats the search while the session list is open, so
+        // that a host that starts later is found as well.
+        if let Screen::Multiplayer(mp) = &self.screen {
+            if mp.screen == crate::screens::multiplayer::MpScreen::Sessions && self.net_is_guest() {
+                let now = self.tick_ms();
+                if now.saturating_sub(self.net_last_discover) > 500 {
+                    self.net_last_discover = now;
+                    if let Some(session) = self.net.as_mut() {
+                        let _ = session.discover();
+                    }
+                }
+            }
+        }
+
+        // Leaving the multiplayer screens closes the session.
+        if self.net.is_some() && !matches!(self.screen, Screen::Multiplayer(_) | Screen::Game) {
+            if let Some(mut session) = self.net.take() {
+                session.say_goodbye();
+                info!("the session is closed");
+            }
+        }
+    }
+
+    /// Start a network match.
+    ///
+    /// The local player keeps the settings, the other blob is steered by the
+    /// other computer - the original's control mode `50`
+    /// (`BV_Menu_0044B8B4.c:122` and `BV_Menu_0044BC94.c:64`).
+    fn start_network_match(&mut self, local: usize) {
+        self.game = Match::new(0x5EED_1234, None);
+        self.apply_network_settings(local);
+        self.net_score_sent = None;
+        self.net_names[local] = self.settings.display_name(local);
+        self.screen = Screen::Game;
+        // Both sides announce their team colour, exactly like the original
+        // (`BV_Menu_0044B8B4.c:124` and `BV_Menu_0044BC94.c:65`).
+        let colour = self.settings.colors[local] as u8;
+        if let Some(session) = self.net.as_mut() {
+            let _ = session.send_colour(local, colour);
+        }
+        info!(player = local + 1, "network match started");
+    }
+
+    /// Copy the settings of the **local** player into the match and hand the
+    /// other blob to the network.
+    fn apply_network_settings(&mut self, local: usize) {
+        crate::sound::set_enabled(self.settings.sound_on);
+        // In a network game the local player is steered by keyboard or by
+        // mouse - the mode of the network menu (`+0x97CDE0`), **not** the one
+        // from the settings screen: there are no computer opponents in the
+        // network menus (`BV_Menu_0044ABA8.c:171-178`).
+        let control = if self.net_control == 0 {
+            Control::Keyboard
+        } else {
+            Control::Mouse
+        };
+        self.game.players[local].control = control;
+        self.game.players[local].skill = 0;
+        self.game.players[local].colour = self.settings.colors[local] as usize;
+        self.game.players[1 - local].control = Control::Network;
+        self.game.players[1 - local].skill = 0;
+        self.game.players[1 - local].colour = self.settings.colors[1 - local] as usize;
+    }
+
+    /// The host tells the guest which sound to play.
+    ///
+    /// The original plays the sound locally **and** sends it over the
+    /// network (`BV_MessageByIndex.c:8-14`); the guest never touches the
+    /// ball, so it only ever hears the sounds of the host.
+    pub(crate) fn net_send_sound(&mut self) {
+        if !self.net_is_host() {
+            return;
+        }
+        let Some(index) = self.game.sound_request.take() else {
+            return;
+        };
+        if let Some(session) = self.net.as_mut() {
+            let _ = session.send_sound(index);
+        }
+    }
+
+    /// The host sends the state of the match.
+    ///
+    /// The original sends it at the end of every frame
+    /// (`BV_Phys_H_443e8.c:735-747`).
+    pub(crate) fn net_send_state(&mut self) {
+        if !self.net_is_host() {
+            return;
+        }
+        let state = self.game.net_state();
+        if let Some(session) = self.net.as_mut() {
+            if let Err(e) = session.send_state(&state) {
+                crate::log::debug!(error = %e, "the state could not be sent");
+            }
+        }
+    }
+
+    /// The guest sends its input to the host.
+    ///
+    /// The original sends it every frame (`BV_Menu_0044BF98.c:318-336`).
+    pub(crate) fn net_send_input(&mut self) {
+        if !self.net_is_guest() {
+            return;
+        }
+        let intent = self.game.players[1].intent;
+        if let Some(session) = self.net.as_mut() {
+            let _ = session.send_input(intent.jump, intent.left, intent.right);
+        }
+    }
+
+    /// The host sends the score when something changed.
+    ///
+    /// The original sends it when a rally starts (`BV_Phys_H_443e8.c:106`),
+    /// when a point is scored (`:604`) and when the match ends
+    /// (`BV_Menu_00445890.c:61`).
+    pub(crate) fn net_send_score(&mut self) {
+        if !self.net_is_host() {
+            return;
+        }
+        let p0 = self.game.players[0].score as u8;
+        let p1 = self.game.players[1].score as u8;
+        let rallies = self.game.rallies_started;
+        // Before the first serve nothing has happened yet - the original
+        // sends its first score packet when the rally starts.
+        if rallies == 0 {
+            return;
+        }
+        let over = matches!(self.game.state, crate::rules::MatchState::Finished(_));
+        let snapshot = (p0, p1, self.game.server as u8, rallies, over);
+        if self.net_score_sent == Some(snapshot) {
+            return;
+        }
+        let first = self.net_score_sent.is_none();
+        self.net_score_sent = Some(snapshot);
+        // During the first rally the service is not settled yet, so the
+        // original announces no server at all (`0xFF`,
+        // `BV_Phys_H_443e8.c:112-115`).
+        let server = if first {
+            0xFF
+        } else {
+            self.game.server as u8
+        };
+        let match_point = self.game.is_match_point();
+        if let Some(session) = self.net.as_mut() {
+            let _ = session.send_score(p0, p1, server, match_point, over);
         }
     }
 
@@ -370,6 +864,9 @@ impl VolleyForge {
         input: &Input,
     ) {
         // --- let the screen react -------------------------------------------
+        // The name of the session and the address of the host live in the
+        // application, so that they survive the screens.
+        self.sync_multiplayer_fields();
         let action = {
             let Self {
                 assets,
@@ -387,35 +884,7 @@ impl VolleyForge {
             screens::render_screen(screen, canvas, &mut ctx_bundle, input)
         };
 
-        match action {
-            Action::None => {}
-            Action::Switch(next) => {
-                info!(screen = next.name(), "screen changed");
-                // The original writes the 24 byte key block into
-                // `settings.dat`; the port persists the settings as soon as
-                // the key definition is done.
-                if matches!(&self.screen, Screen::KeyDef(_))
-                    && matches!(&next, Screen::Settings(_))
-                {
-                    self.save_settings();
-                }
-                self.screen = next;
-            }
-            Action::StartMatch => {
-                info!("starting a match");
-                self.game = Match::new(0x5EED_1234, None);
-                // The team colours and the control modes are settings of the
-                // original (`+0x97828B` / `+0x978224`), so the match has to
-                // start with what the player picked in the settings screen.
-                self.apply_settings_to_match();
-                self.screen = Screen::Game;
-            }
-            Action::Quit => {
-                info!("quitting");
-                self.save_settings();
-                std::process::exit(0);
-            }
-        }
+        self.handle_action(action);
 
         // The language switch writes straight to the settings, so persist it
         // as soon as it changes.
@@ -525,13 +994,30 @@ impl VolleyForge {
                     self.game.players[i].intent.jump = mouse_down;
                 }
                 Control::Cpu => self.game.set_intent(i, Intent::default()),
+                // A network player is steered by the other computer: its
+                // intent arrives over the wire (`Cmd::Input`) and must not
+                // be overwritten here.
+                Control::Network => {}
             }
         }
 
-        let names = [
-            self.settings.display_name(0),
-            self.settings.display_name(1),
-        ];
+        // --- the network ----------------------------------------------------
+        // The host sends the state of the match, the guest its input - the
+        // original does it at the end of its frame as well.
+        self.net_send_input();
+        self.net_send_state();
+        self.net_send_sound();
+
+        let names = if self.net.is_some() {
+            // In a network match the names are the ones of the two players:
+            // the local one and the one the other computer sent.
+            self.net_names.clone()
+        } else {
+            [
+                self.settings.display_name(0),
+                self.settings.display_name(1),
+            ]
+        };
         let tick = self.tick_ms();
 
         self.renderer.draw(
@@ -647,5 +1133,94 @@ fn quit(code: i32) -> ! {
     #[cfg(not(target_arch = "wasm32"))]
     {
         std::process::exit(code);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The name of the session survives the screens and the match.
+    ///
+    /// The original keeps it in the memory of the form (`+0x97CDD1`), so it is
+    /// still there after the match has been left - only the program end wipes
+    /// it.
+    #[test]
+    fn the_name_of_the_session_survives_the_match() {
+        let mut app = VolleyForge::new();
+
+        // The host screen gets a random name, exactly like the original
+        // (`BV_Menu_0044ABA8.c:57-64`).
+        app.screen = Screen::Multiplayer(screens::multiplayer::MpState::host());
+        app.sync_multiplayer_fields();
+        let generated = match &app.screen {
+            Screen::Multiplayer(mp) => mp.game_name.clone(),
+            _ => panic!("the host screen is expected"),
+        };
+        assert!(
+            generated.starts_with("game "),
+            "the random name is missing: {generated}"
+        );
+
+        // The player changes the name.
+        app.handle_action(Action::NameConfirmed {
+            target: crate::screens::dialog::NameTarget::GameName,
+            text: "Meine Runde".to_string(),
+        });
+
+        // The match is played and left again.
+        app.screen = Screen::Menu(screens::menu::MenuState::default());
+        app.screen = Screen::Multiplayer(screens::multiplayer::MpState::host());
+        app.sync_multiplayer_fields();
+        match &app.screen {
+            Screen::Multiplayer(mp) => assert_eq!(
+                mp.game_name, "Meine Runde",
+                "the name must survive the match"
+            ),
+            _ => panic!("the host screen is expected"),
+        }
+    }
+
+    /// The control mode of the network menus switches between keyboard and
+    /// mouse - the original does `(mode + 1) & 1`
+    /// (`BV_Menu_0044ABA8.c:171-178`).
+    #[test]
+    fn the_control_mode_switches_between_keyboard_and_mouse() {
+        fn mode(app: &VolleyForge) -> usize {
+            match &app.screen {
+                Screen::Multiplayer(mp) => mp.control,
+                _ => panic!("the host screen is expected"),
+            }
+        }
+        let mut app = VolleyForge::new();
+        app.screen = Screen::Multiplayer(screens::multiplayer::MpState::host());
+        app.sync_multiplayer_fields();
+        assert_eq!(mode(&app), 0, "the keyboard comes first");
+
+        app.handle_action(Action::CycleNetControl);
+        app.sync_multiplayer_fields();
+        assert_eq!(mode(&app), 1, "the mouse comes next");
+
+        app.handle_action(Action::CycleNetControl);
+        app.sync_multiplayer_fields();
+        assert_eq!(mode(&app), 0, "and back to the keyboard");
+    }
+
+    /// In a network match the local player is steered by the mode of the
+    /// network menu - not by the one of the settings screen, where a
+    /// computer opponent could be selected.
+    #[test]
+    fn the_network_match_uses_the_mode_of_the_network_menu() {
+        let mut app = VolleyForge::new();
+        app.settings.control[0] = crate::settings::Control::CpuHard;
+        app.net_control = 1;
+        app.game = Match::new(0x5EED_1234, None);
+        app.apply_network_settings(0);
+        assert_eq!(app.game.players[0].control, Control::Mouse);
+        assert_eq!(
+            app.game.players[1].control,
+            Control::Network,
+            "the other blob is steered over the wire"
+        );
     }
 }

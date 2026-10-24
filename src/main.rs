@@ -22,6 +22,7 @@ mod fonts;
 mod layout;
 mod log;
 mod logging;
+mod net;
 mod pak;
 mod player;
 mod render;
@@ -322,6 +323,8 @@ fn shot_screen(name: &str) {
         "keydef" => screens::Screen::KeyDef(screens::keydef::KeyDefState::default()),
         "stats" => screens::Screen::Stats(screens::stats::StatsState::default()),
         "multiplayer" => screens::Screen::Multiplayer(screens::multiplayer::MpState::options()),
+        "mphost" => screens::Screen::Multiplayer(screens::multiplayer::MpState::host()),
+        "mpclient" => screens::Screen::Multiplayer(screens::multiplayer::MpState::client()),
         "nameinput" => screens::Screen::NameInput(screens::dialog::NameInputState::new(
             0,
             &settings.names[0].clone(),
@@ -638,6 +641,15 @@ fn main() -> eframe::Result<()> {
         selftest(n);
         return Ok(());
     }
+    if args.iter().any(|a| a == "--nettest") {
+        let n: u64 = args
+            .windows(2)
+            .find(|w| w[0] == "--nettest")
+            .and_then(|w| w[1].parse().ok())
+            .unwrap_or(400);
+        nettest(n);
+        return Ok(());
+    }
 
     court::log_recovered_constants();
 
@@ -902,6 +914,109 @@ fn selftest(frames: u64) {
     );
     if rallies == 0 {
         error!("selftest never produced a rally");
+    }
+}
+
+/// Run a complete network session head-less: a host and a guest, both of them
+/// the application itself, playing over a real UDP socket.
+///
+/// It proves the whole chain of the port: the session list, the join, the
+/// start of the match, the input of the guest and the state of the host.
+fn nettest(frames: u64) {
+    use std::time::Duration;
+
+    // The head-less run must not play sounds.
+    sound::set_enabled(false);
+    info!(frames, "nettest: starting");
+
+    let mut host = app::VolleyForge::new();
+    let mut guest = app::VolleyForge::new();
+
+    // The host opens the session, the guest looks for it.
+    host.handle_action(screens::Action::StartHosting("game 1".to_string()));
+    guest.handle_action(screens::Action::FindSessions);
+    if host.net.is_none() {
+        error!(
+            port = net::DEFAULT_PORT,
+            "the port is not free - the nettest cannot run"
+        );
+        return;
+    }
+
+    let mut joined = false;
+    let mut started = false;
+
+    for _ in 0..frames {
+        host.net_tick();
+        guest.net_tick();
+
+        if !joined {
+            // The guest joins the session it found.
+            let found = guest.net.as_ref().map(|s| s.found.len()).unwrap_or(0);
+            if found > 0 {
+                guest.handle_action(screens::Action::JoinSession(0));
+                joined = true;
+                info!("nettest: the join request is sent");
+            }
+        }
+
+        // The host simulates the match and sends its state, the guest only
+        // sends its input - exactly like the original.
+        if matches!(host.screen, screens::Screen::Game) {
+            started = true;
+            host.game.step();
+            host.net_send_score();
+            host.net_send_state();
+            host.net_send_sound();
+        }
+        if matches!(guest.screen, screens::Screen::Game) {
+            // The guest walks to the right all the time.
+            guest.game.players[1].intent = player::Intent {
+                left: false,
+                right: true,
+                jump: false,
+            };
+            guest.net_send_input();
+        }
+    }
+
+    if !started {
+        error!("nettest: the match never started");
+        return;
+    }
+
+    // Let the last state arrive.
+    for _ in 0..20 {
+        host.net_send_state();
+        std::thread::sleep(Duration::from_millis(5));
+        guest.net_tick();
+    }
+
+    // The guest must show exactly what the host simulates.
+    let host_state = host.game.net_state();
+    let guest_state = guest.game.net_state();
+    if host_state == guest_state {
+        info!("nettest: the guest mirrors the host exactly");
+    } else {
+        error!(
+            host = ?host_state,
+            guest = ?guest_state,
+            "the guest does not mirror the host"
+        );
+    }
+
+    // The input of the guest must have moved its blob **on the host**.
+    let moved = host.game.players[1].x != court::PLAYER_SPAWN_X[1];
+    info!(
+        host_x = host.game.players[1].x,
+        guest_x = guest.game.players[1].x,
+        spawn = court::PLAYER_SPAWN_X[1],
+        "nettest: the blob of the guest"
+    );
+    if !moved {
+        error!("nettest: the input of the guest never arrived");
+    } else {
+        info!("nettest: the input of the guest arrived and moved its blob");
     }
 }
 

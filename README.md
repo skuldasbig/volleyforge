@@ -102,14 +102,62 @@ Die Steuerung entspricht exakt dem gewohnten Original:
 
 ---
 
+## 🌐 Netzwerkpartie
+
+Das Original spielte 2001 mit **DirectPlay 4** — diese Bibliothek gibt es
+nicht mehr. VolleyForge spricht deshalb **rohes UDP** und bildet das
+Datenpaket des Originals **byteweise** nach. Zwei Rechner im selben LAN
+genügen.
+
+### Ablauf
+
+**Host** — Hauptmenü → `NETZWERK-SPIEL` → `EIN SPIEL HOSTEN...`
+
+| Zeile | Funktion |
+|---|---|
+| `NAME DES SPIELS:` | Name der Sitzung. Ohne Eingabe vergibt das Spiel **„game N"** — genau wie im Original. Der Name bleibt für die gesamte Programmlaufzeit erhalten, auch wenn die Partie dazwischen beendet wird. |
+| `STEUERUNG:` | **TASTATUR** oder **MAUS** für den eigenen Blob — mit <kbd>Enter</kbd> umschalten. |
+| `SPIEL BEGINNEN!` | Sitzung öffnen und auf den Gast warten. |
+| `ZURÜCK` | zurück zum Menü. |
+
+**Gast** — Hauptmenü → `NETZWERK-SPIEL` → `ALS GAST SPIELEN...`
+
+| Zeile | Funktion |
+|---|---|
+| `HOST - IP:` | Adresse des Hosts, z. B. `192.168.1.20` oder `192.168.1.20:24680`. Ist sie eingetragen, wird **direkt** verbunden — ohne Suche. |
+| `STEUERUNG:` | **TASTATUR** oder **MAUS** für den eigenen Blob. |
+| `SPIELE SUCHEN` | Broadcast im LAN: alle wartenden Sitzungen erscheinen in der Liste, eine davon auswählen. |
+| `ZURÜCK` | zurück zum Menü. |
+
+### Technik
+
+* **Transport:** ein UDP-Socket, Port **24680**. Kein Server im Internet,
+  keine Fremdsoftware, keine zusätzlichen Abhängigkeiten.
+* **Paket:** **40 Byte** — 1 Byte Kommando, 3 Byte Padding, 9 DWORDs. Die
+  Kommandos **2 bis 6 sind die des Originals**: 2 = Punkte, 3 = Zustand,
+  4 = Eingabe, 5 = Ton, 6 = Teamfarbe.
+* **Wie im Original:** Der **Host berechnet** Ball und Punkte und schickt
+  jeden Frame den kompletten Spielzustand; der **Gast spiegelt** ihn und
+  schickt nur seine eigene Eingabe (links/rechts/Sprung). Das ist ein
+  **State-Sync**, kein Lockstep — genau wie 2001.
+* **Grenzen:** LAN only (kein NAT-Traversierung, also nicht über Router
+  hinweg), nicht im Browser. Unter Windows fragt die Firewall beim ersten
+  Mal nach der Freigabe von **UDP 24680**.
+
+> 💡 Die Browser-Version hat keinen UDP-Socket — dort bleibt der Menüpunkt
+> wie im Original ohne DirectPlay ausgegraut.
+
+---
+
 ## ✨ Features
 
 - 🏐 **Präzise 1:1 Physik:** Exakte Ballintegration, Netzkollisionen, Sub-Stepping und Hitboxen.
 - 🎨 **Originale Canvas-Pipeline:** 800×600-Canvas, Tag-/Nachtmodus für Menüs und Original-Farbtönungen.
 - 🤖 **Kultige KI:** Vollwertige Nachbildung der Gegner *Adam* (leicht), *Bert* (mittel) und *Carl* (schwer).
+- 🌐 **Netzwerkpartie:** Originalgetreuer State-Sync über rohes UDP — 40-Byte-Paket wie 2001, Sitzungssuche per Broadcast, Direktverbindung per IP, ganz ohne Server im Internet.
 - 🔊 **Sound-Support:** Echte Retro-WAV-Soundausgabe über ein leichtgewichtiges modernes Audio-Backend.
 - 🖥️ **Modernes Drumherum:** Schnelles, sauberes Rust-Fundament mit `egui`/OpenGL (`glow`), flexibler Fenstermodus oder echter Vollbildmodus (<kbd>F11</kbd>) mit scharfer nativer Skalierung.
-- 🛠️ **Integrierte Diagnose-Tools:** CLI-Befehle für Selbsttests (`--selftest`) und Asset-Prüfung (`--dump-assets`).
+- 🛠️ **Integrierte Diagnose-Tools:** CLI-Befehle für Selbsttests (`--selftest`), einen headless Netzwertest (`--nettest`) und Asset-Prüfung (`--dump-assets`).
 
 ---
 

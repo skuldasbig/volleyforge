@@ -120,6 +120,15 @@ pub fn sound_b() {
     play(1);
 }
 
+/// Play a sound by its index in `sound.pak`.
+///
+/// The original ships the index over the network in its sound packet
+/// (`BV_MessageByIndex.c:8-14`) and the guest plays it
+/// (`BV_Menu_0044BF98.c:144-146`).
+pub fn play_index(index: usize) {
+    play(index);
+}
+
 /// Play one of the two sounds, if the sound effects are switched on.
 
 #[cfg(target_arch = "wasm32")]

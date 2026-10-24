@@ -193,10 +193,17 @@ pub struct GameAssets {
     /// The three localisation tables (French, German, English).
     pub tables: Vec<TextTable>,
     /// True when a network transport is available. The original greys out its
-    /// "Network Match" entry when DirectPlay is missing; VolleyForge does the
-    /// same until the UDP transport exists.
+    /// "Network Match" entry when DirectPlay is missing; VolleyForge greys it
+    /// out in the browser build, where there is no UDP socket.
     pub network_available: bool,
 }
+
+/// Is the network match available in this build?
+///
+/// The transport is a UDP socket, and the browser build has none - there the
+/// "Network Match" entry stays greyed out, exactly like the original without
+/// DirectPlay.
+pub const NETWORK_AVAILABLE: bool = !cfg!(target_arch = "wasm32");
 
 impl GameAssets {
     /// An empty set, used when the containers cannot be read.
@@ -207,7 +214,7 @@ impl GameAssets {
             sprites: Vec::new(),
             sounds: Vec::new(),
             tables: Vec::new(),
-            network_available: false,
+            network_available: NETWORK_AVAILABLE,
         }
     }
 
@@ -528,6 +535,6 @@ fn build_graphics(decoded: pak::Assets) -> GameAssets {
         sprites,
         sounds: Vec::new(),
         tables: Vec::new(),
-        network_available: false,
+        network_available: NETWORK_AVAILABLE,
     }
 }

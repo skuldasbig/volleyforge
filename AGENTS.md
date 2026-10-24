@@ -6,7 +6,7 @@ und kein fremder Port wurden konsultiert.
 
 | Was | Wo |
 |---|---|
-| Quellcode | `src/` (22 Module) |
+| Quellcode | `src/` (29 Module) |
 | Original-Assets | `graph.pak`, `sound.pak`, `text.pak` — **nicht eingecheckt**, liegen neben der EXE (der Build kopiert sie aus dem Repo-Root nach `target/`) |
 | **Wissensbasis** | `../WISSENSSTAND.md` — Teil 0 = Dekompilat-Landkarte mit allen Konstanten |
 | Konzept | `../KONZEPT.md` — Architektur, Canvas-Pipeline, Spielregeln |
@@ -66,10 +66,13 @@ und kein fremder Port wurden konsultiert.
 
 ```
 src/
-  main.rs      CLI: --shot, --verify, --dump-assets, --selftest, --font
+  main.rs      CLI: --shot, --verify, --dump-assets, --selftest, --nettest, --font
   app.rs       egui-Shell, Screen-Automat, Canvas→Textur, Eingabelayer
   render.rs    Spielbildschirm (Originalgrafik)          → Canvas
   screens/     7 Menübildschirme + Dialoge              → Canvas
+  net/         UDP-Transport (ersetzt DirectPlay)
+    packet.rs  40-Byte-Paket des Originals (Kommandos 2..6)
+    udp.rs     Host/Gast-Rollen, Broadcast-Sitzungssuche
   canvas.rs    800x600-Canvas mit den Original-Operationen
   fonts.rs     55 Font-Slots, 20 px Abstand, Schräglage
   layout.rs    Layout-Konstanten, to_top_down(), Tint
@@ -81,6 +84,15 @@ src/
   pak.rs       LZW-Container-Format
   assets.rs    Laden der drei .pak-Container
 ```
+
+**Netzwerk** (`src/net/`): Das Original nutzt DirectPlay 4, der Port rohes UDP
+(Port 24680). Das Paket ist **40 Byte** wie im Original, die Kommandos 2…6
+sind originalgetreu (2 Punkte, 3 Zustand, 4 Eingabe, 5 Ton, 6 Farbe); 7…11
+sind Port-Ergänzungen für die Sitzungssuche, die DirectPlay übernommen hat.
+Die Rollen folgen dem Original: **der Host simuliert und sendet jeden Frame
+den vollen Zustand, der Gast spiegelt und schickt nur seine drei
+Eingabeflags** — kein Lockstep. Belege: `../WISSENSSTAND.md` 0.12.
+Prüfen: `cargo run -- --nettest`.
 
 **Ein Canvas für alles** (KONZEKT 2.1): Menü *und* Spiel rendern in dieselbe
 800×600-Fläche, die als Textur in egui geladen wird. Nur so greifen

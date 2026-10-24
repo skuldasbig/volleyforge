@@ -9,9 +9,9 @@
 //!                           ->  waiting        (FUN_0044B8B4)
 //! ```
 //!
-//! VolleyForge has the screens and the navigation, but the transport itself
-//! is not implemented yet - the original's DirectPlay lobby has no equivalent
-//! in a plain UDP port.
+//! The screens are the original's; the transport behind them is VolleyForge's
+//! UDP replacement for DirectPlay (see [`crate::net`]). The screens only say
+//! *what* should happen - the application owns the socket.
 
 use crate::canvas::Canvas;
 use crate::fonts::TextStyle;
@@ -19,7 +19,7 @@ use crate::layout::{
     self, CLIENT_ITEM_X, CLIENT_ITEM_Y, HOST_ITEM_X, HOST_ITEM_Y, LINE_HEIGHT, MP_ITEM_X,
     MP_ITEM_Y, TITLE_CENTER_X, TITLE_Y,
 };
-use crate::log::{info, warn};
+use crate::log::info;
 use crate::screens::{draw_cursor, draw_row, hit, Action, Ctx, Input, Screen};
 
 /// Which multiplayer screen is shown.
@@ -44,6 +44,12 @@ pub struct MpState {
     pub host_address: String,
     /// Sessions the guest found.
     pub sessions: Vec<String>,
+    /// The control mode of the local player: 0 = keyboard, 1 = mouse.
+    ///
+    /// The original switches between the two with `(mode + 1) & 1`
+    /// (`BV_Menu_0044ABA8.c:171-178`); the computer opponents are not
+    /// offered in a network game.
+    pub control: usize,
 }
 
 impl MpState {
@@ -54,6 +60,59 @@ impl MpState {
             game_name: String::new(),
             host_address: String::new(),
             sessions: Vec::new(),
+            control: 0,
+        }
+    }
+
+    /// The host settings of the original (`FUN_0044ABA8`).
+    pub fn host() -> MpState {
+        MpState {
+            screen: MpScreen::Host,
+            selected: 0,
+            game_name: String::new(),
+            host_address: String::new(),
+            sessions: Vec::new(),
+            control: 0,
+        }
+    }
+
+    /// The client settings of the original (`FUN_0044B0B0`).
+    pub fn client() -> MpState {
+        MpState {
+            screen: MpScreen::Client,
+            selected: 0,
+            game_name: String::new(),
+            host_address: String::new(),
+            sessions: Vec::new(),
+            control: 0,
+        }
+    }
+
+    /// The screen that waits for the other computer.
+    ///
+    /// The original shows it while the host waits for a guest
+    /// (`FUN_0044B8B4`) and while the guest waits for the host
+    /// (`FUN_0044BC94`).
+    pub fn waiting() -> MpState {
+        MpState {
+            screen: MpScreen::Waiting,
+            selected: 0,
+            game_name: String::new(),
+            host_address: String::new(),
+            sessions: Vec::new(),
+            control: 0,
+        }
+    }
+
+    /// The list of the running sessions.
+    pub fn sessions() -> MpState {
+        MpState {
+            screen: MpScreen::Sessions,
+            selected: 0,
+            game_name: String::new(),
+            host_address: String::new(),
+            sessions: Vec::new(),
+            control: 0,
         }
     }
 }
@@ -110,7 +169,9 @@ pub fn render(
                 let text = if i == 0 {
                     format!("{} {}", label, state.game_name)
                 } else if i == 1 {
-                    format!("{} {}", label, ctx.text("settings", 7))
+                    // The original shows the control mode of the local
+                    // player (`@settings` 7 = keyboard, 8 = mouse).
+                    format!("{} {}", label, ctx.text("settings", 7 + state.control))
                 } else {
                     label
                 };
@@ -142,7 +203,9 @@ pub fn render(
                 let text = if i == 0 {
                     format!("{} {}", label, state.host_address)
                 } else if i == 1 {
-                    format!("{} {}", label, ctx.text("settings", 7))
+                    // The original shows the control mode of the local
+                    // player (`@settings` 7 = keyboard, 8 = mouse).
+                    format!("{} {}", label, ctx.text("settings", 7 + state.control))
                 } else {
                     label
                 };
@@ -171,13 +234,32 @@ pub fn render(
                 let empty = ctx.text("clientgamelist", 2);
                 ctx.font.draw(canvas, &empty, 200, 200, TextStyle::Normal);
             } else {
+                // The sessions the hosts announced - the original lists them
+                // with the name of the session (`FUN_0044B530`).
                 for (i, s) in state.sessions.iter().enumerate() {
-                    ctx.font.draw(canvas, s, 200, 200 - i as i32 * 40, TextStyle::Normal);
+                    let y = layout::to_top_down(250 - i as i32 * 40, LINE_HEIGHT);
+                    rects.push(draw_row(
+                        canvas,
+                        ctx.font,
+                        s,
+                        300,
+                        y,
+                        state.selected == i,
+                        false,
+                    ));
                 }
             }
             let back = ctx.text("clientgamelist", 1);
-            rects.push(draw_row(canvas, ctx.font, &back, 250, 100, false, false));
-            1
+            rects.push(draw_row(
+                canvas,
+                ctx.font,
+                &back,
+                250,
+                100,
+                state.selected == state.sessions.len(),
+                false,
+            ));
+            state.sessions.len() + 1
         }
         MpScreen::Waiting => {
             let title = ctx.text("hostwaiting", 0);
@@ -265,13 +347,16 @@ fn activate(state: &mut MpState, _ctx: &mut Ctx) -> Action {
                 crate::screens::dialog::NameInputState::new(2, &state.game_name),
             )),
             1 => {
-                warn!("the host control mode is fixed for now");
-                Action::None
+                // The original switches the control mode of the local player
+                // between keyboard and mouse: `(mode + 1) & 1`
+                // (`BV_Menu_0044ABA8.c:171-178`).
+                Action::CycleNetControl
             }
             2 => {
-                warn!("hosting is not implemented yet - the UDP transport is still missing");
-                state.screen = MpScreen::Waiting;
-                Action::None
+                // The original opens the session here and waits for the
+                // guest (`FUN_0044B8B4`).
+                info!(name = %state.game_name, "the session is opened");
+                Action::StartHosting(state.game_name.clone())
             }
             _ => {
                 state.screen = MpScreen::Options;
@@ -284,14 +369,16 @@ fn activate(state: &mut MpState, _ctx: &mut Ctx) -> Action {
                 crate::screens::dialog::NameInputState::new(3, &state.host_address),
             )),
             1 => {
-                warn!("the guest control mode is fixed for now");
-                Action::None
+                // The original switches the control mode of the local player
+                // between keyboard and mouse: `(mode + 1) & 1`
+                // (`BV_Menu_0044B0B0.c`, dieselbe Zeile).
+                Action::CycleNetControl
             }
             2 => {
-                warn!("session discovery is not implemented yet");
-                state.screen = MpScreen::Sessions;
-                state.sessions.clear();
-                Action::None
+                // The original enumerates the running sessions here
+                // (`FUN_0044B530`).
+                info!("the session list is searched");
+                Action::FindSessions
             }
             _ => {
                 state.screen = MpScreen::Options;
@@ -300,9 +387,14 @@ fn activate(state: &mut MpState, _ctx: &mut Ctx) -> Action {
             }
         },
         MpScreen::Sessions => {
-            state.screen = MpScreen::Options;
-            state.selected = 0;
-            Action::None
+            if state.selected < state.sessions.len() {
+                info!(session = state.selected, "a session is chosen");
+                Action::JoinSession(state.selected)
+            } else {
+                state.screen = MpScreen::Options;
+                state.selected = 0;
+                Action::None
+            }
         }
         MpScreen::Waiting => Action::None,
     }

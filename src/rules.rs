@@ -141,6 +141,19 @@ pub struct Match {
     pub human: Option<usize>,
     /// Match finished, used to freeze the ball.
     pub last_point: Option<usize>,
+    /// The server the **host** announced, if this is a network match.
+    ///
+    /// The original's guest learns the server from the score packet: byte 2
+    /// carries the player index, `0xFF` means "no indicator" - that is the
+    /// case during the very first rally, where the service is not settled yet
+    /// (`BV_Phys_H_443e8.c:112-115`). `None` means "this is a local match".
+    pub announced_server: Option<u8>,
+    /// A sound that has to be sent to the other computer.
+    ///
+    /// The original plays the sound locally **and** tells the other
+    /// computer about it (`BV_MessageByIndex.c:8-14`); the guest only ever
+    /// hears the sounds of the host, because it never touches the ball.
+    pub sound_request: Option<u8>,
 }
 
 impl Match {
@@ -175,6 +188,8 @@ impl Match {
             rng,
             human,
             last_point: None,
+            announced_server: None,
+            sound_request: None,
         }
     }
 
@@ -221,7 +236,17 @@ impl Match {
     /// changes without a point, so the original does not show it.
     ///
     /// `None` therefore means "no indicator at all".
+    ///
+    /// In a network match the **host** decides: the guest takes the server
+    /// from the score packet, where `0xFF` means "no indicator" - the case
+    /// during the first rally.
     pub fn serve_indicator(&self) -> Option<usize> {
+        if let Some(announced) = self.announced_server {
+            if announced == 0xFF {
+                return None;
+            }
+            return Some(announced as usize);
+        }
         if self.rallies_started >= 2 {
             Some(self.server)
         } else {
@@ -265,6 +290,69 @@ impl Match {
     /// Feed one player's intent for this frame.
     pub fn set_intent(&mut self, index: usize, intent: Intent) {
         self.players[index].intent = intent;
+    }
+
+    // -----------------------------------------------------------------------
+    // The network: the host simulates, the guest mirrors
+    // -----------------------------------------------------------------------
+
+    /// The state the host sends every frame.
+    ///
+    /// The original sends the ball, both blobs and their animation counters
+    /// (`BV_Phys_H_443e8.c:735-747`); the guest overwrites its own state
+    /// with it (`BV_Menu_0044BF98.c:134-140`).
+    pub fn net_state(&self) -> crate::net::State {
+        crate::net::State {
+            ball_x: self.ball.x,
+            ball_y: self.ball.y,
+            p0: crate::net::Point {
+                x: self.players[0].x,
+                y: self.players[0].y,
+            },
+            p1: crate::net::Point {
+                x: self.players[1].x,
+                y: self.players[1].y,
+            },
+            anim0: self.players[0].frame as u32,
+            anim1: self.players[1].frame as u32,
+        }
+    }
+
+    /// Take over the state the host sent.
+    ///
+    /// The original's guest does exactly this and nothing else: it never
+    /// steps the physics, it only draws what the host tells it
+    /// (`FUN_0044BF98`).
+    pub fn apply_net_state(&mut self, state: &crate::net::State) {
+        self.ball.x = state.ball_x;
+        self.ball.y = state.ball_y;
+        self.players[0].x = state.p0.x;
+        self.players[0].y = state.p0.y;
+        self.players[1].x = state.p1.x;
+        self.players[1].y = state.p1.y;
+        self.players[0].frame = state.anim0 as usize;
+        self.players[1].frame = state.anim1 as usize;
+    }
+
+    /// Take over the score the host sent.
+    ///
+    /// The original's score packet carries the two scores, the player who
+    /// serves (`0xFF` = no serve indicator), the match point flag and the
+    /// "match over" flag (`BV_Phys_H_443e8.c:106-117`).
+    pub fn apply_net_score(&mut self, p0: u8, p1: u8, server: u8, over: bool) {
+        self.players[0].score = p0 as i32;
+        self.players[1].score = p1 as i32;
+        self.announced_server = Some(server);
+        if server != 0xFF {
+            self.server = server as usize;
+        }
+        if over {
+            if let Some(w) = self.is_over() {
+                self.state = MatchState::Finished(w);
+                self.ball.dead = true;
+                info!(winner = w + 1, "the host ended the match");
+            }
+        }
     }
 
     /// Advance the whole match by one physics frame.
@@ -387,6 +475,9 @@ impl Match {
                     // raised and `FUN_00442964` is called with the second
                     // sound).
                     crate::sound::sound_b();
+                    // The original tells the other computer about the sound
+                    // as well (`BV_MessageByIndex.c:8-14`).
+                    self.sound_request = Some(1);
                     if self.players[i].touch > TOUCH_LIMIT {
                         fault = Some(i);
                     }
@@ -598,6 +689,8 @@ impl Match {
         // The original plays sound A when the rally is over
         // (`BV_Phys_H_443e8.c:668`: the first sound of `sound.pak`).
         crate::sound::sound_a();
+        // The other computer has to hear it as well.
+        self.sound_request = Some(0);
         // The opening rally of a match is not scored
         // (`BV_Phys_I_45890.c:33` calls the rally with the "first serve"
         // flag, which suppresses the point).
@@ -1296,5 +1389,61 @@ mod tests {
         assert!(m.is_match_point(), "14 points and a lead is a match point");
         m.players[1].score = 15;
         assert!(!m.is_match_point(), "without the lead it is no match point");
+    }
+
+    /// The host's state has to survive the way to the guest unchanged.
+    #[test]
+    fn the_state_travels_from_the_host_to_the_guest() {
+        let mut host = Match::new(0x5EED_1234, Some(0));
+        host.serve();
+        host.players[0].x = 123;
+        host.players[0].y = 456;
+        host.players[1].x = 789;
+        host.players[1].y = 1011;
+        host.players[0].frame = 3;
+        host.players[1].frame = 7;
+        host.ball.x = 42;
+        host.ball.y = 4242;
+
+        let state = host.net_state();
+        let mut guest = Match::new(0x5EED_1234, Some(1));
+        guest.apply_net_state(&state);
+
+        assert_eq!(guest.ball.x, 42);
+        assert_eq!(guest.ball.y, 4242);
+        assert_eq!(guest.players[0].x, 123);
+        assert_eq!(guest.players[0].y, 456);
+        assert_eq!(guest.players[1].x, 789);
+        assert_eq!(guest.players[1].y, 1011);
+        assert_eq!(guest.players[0].frame, 3);
+        assert_eq!(guest.players[1].frame, 7);
+    }
+
+    /// The guest takes the score, the server and the end of the match from
+    /// the host's score packet.
+    #[test]
+    fn the_score_travels_from_the_host_to_the_guest() {
+        let mut guest = Match::new(0x5EED_1234, Some(1));
+        guest.apply_net_score(7, 3, 1, false);
+        assert_eq!(guest.players[0].score, 7);
+        assert_eq!(guest.players[1].score, 3);
+        assert_eq!(guest.server, 1);
+        assert_eq!(
+            guest.serve_indicator(),
+            Some(1),
+            "the announced server carries the indicator"
+        );
+
+        // 0xFF means "no indicator" - that is the case during the first rally.
+        guest.apply_net_score(0, 0, 0xFF, false);
+        assert_eq!(guest.serve_indicator(), None);
+
+        // The end of the match.
+        guest.apply_net_score(15, 13, 0, true);
+        assert!(
+            matches!(guest.state, MatchState::Finished(0)),
+            "the guest sees the match end: {:?}",
+            guest.state
+        );
     }
 }
