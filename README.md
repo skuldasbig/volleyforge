@@ -4,6 +4,12 @@
 > *Genau das gleiche Feeling wie damals in der Kindheit.*
 
 <p align="center">
+  <a href="https://skuldasbig.github.io/volleyforge/">
+    <strong>🎮 Hier direkt im Browser spielen (WebAssembly)</strong>
+  </a>
+</p>
+
+<p align="center">
   <img src="screenshots/menu.png" alt="VolleyForge Hauptmenü" width="49%">
   <img src="screenshots/game.png" alt="VolleyForge Gameplay" width="49%">
 </p>
@@ -46,7 +52,10 @@ Das Originalspiel samt Assets ist auf [archive.org](https://archive.org/) archiv
 
 ## 🚀 Spiel starten / Einrichten
 
-> 🌐 **Direkt im Browser spielen:** Dank WebAssembly kannst du VolleyForge direkt im Webbrowser ohne Installation spielen! Bei jedem Push auf `main` wird die Webversion automatisch via GitHub Actions auf **GitHub Pages** bereitgestellt.  
+> 🌐 **Direkt im Browser spielen:** Dank WebAssembly kannst du VolleyForge direkt im Webbrowser ohne Installation spielen:  
+> 👉 **[https://skuldasbig.github.io/volleyforge/](https://skuldasbig.github.io/volleyforge/)**  
+> *(Beim ersten Aufruf einfach `blobby.zip` oder die drei `.pak`-Dateien per Drag & Drop ins Browserfenster ziehen – fertig!)*  
+>  
 > 💡 **Desktop-Downloads:** Unter **Releases** findest du fertige Windows-Builds (`.exe`) sowie portable Linux-Pakete (`.AppImage`).
 
 Du kannst VolleyForge auf zwei einfache Arten mit den Assets versorgen:
