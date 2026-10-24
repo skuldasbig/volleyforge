@@ -175,3 +175,4 @@ trunk serve --release
 ## ⚖️ License & Legal Notice
 
 VolleyForge is a pure fan and preservation project. It is not affiliated with, endorsed by, or associated with the original developers of *Blobby Volley* (Daniel S. / Silvio M.). All trademarks, assets, and references to the original game remain the property of their respective owners. The source code of VolleyForge was reconstructed independently through clean-room reverse engineering.
+
