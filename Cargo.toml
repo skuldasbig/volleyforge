@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-eframe = { version = "0.37.0", default-features = false, features = ["glow", "default_fonts"] }
+eframe = { version = "0.37.0", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
 egui = "0.37.0"
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 tracing = "0.1.44"
