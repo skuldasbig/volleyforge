@@ -98,8 +98,7 @@ jobs:
             libxkbcommon-dev \
             pkg-config \
             wget \
-            file \
-            librsvg2-bin
+            file
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -135,45 +134,31 @@ jobs:
           cp *.pak AppDir/usr/bin/
 
           # Desktop-Entry erstellen
-          cat << 'EOF' > AppDir/volleyforge.desktop
-[Desktop Entry]
-Type=Application
-Name=VolleyForge
-Comment=Authentic 1:1 Blobby Volley Reimplementation
-Exec=volleyforge
-Icon=volleyforge
-Categories=Game;ArcadeGame;
-Terminal=false
-EOF
+          printf '%s\n' \
+            '[Desktop Entry]' \
+            'Type=Application' \
+            'Name=VolleyForge' \
+            'Comment=Authentic 1:1 Blobby Volley Reimplementation' \
+            'Exec=volleyforge' \
+            'Icon=volleyforge' \
+            'Categories=Game;ArcadeGame;' \
+            'Terminal=false' \
+            > AppDir/volleyforge.desktop
           cp AppDir/volleyforge.desktop AppDir/usr/share/applications/volleyforge.desktop
 
-          # Icon erstellen (Volleyball-Vektorgrafik -> PNG 256x256)
-          cat << 'EOF' > AppDir/volleyforge.svg
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
-  <defs>
-    <radialGradient id="grad" cx="35%" cy="35%" r="65%">
-      <stop offset="0%" stop-color="#ff7b54"/>
-      <stop offset="100%" stop-color="#c0392b"/>
-    </radialGradient>
-  </defs>
-  <circle cx="128" cy="128" r="116" fill="url(#grad)" stroke="#2c3e50" stroke-width="12"/>
-  <path d="M 50 45 Q 128 128 206 211" fill="none" stroke="#ffffff" stroke-width="8" stroke-linecap="round"/>
-  <path d="M 206 45 Q 128 128 50 211" fill="none" stroke="#ffffff" stroke-width="8" stroke-linecap="round"/>
-  <circle cx="128" cy="128" r="24" fill="#f1c40f" stroke="#2c3e50" stroke-width="6"/>
-</svg>
-EOF
-          rsvg-convert -w 256 -h 256 AppDir/volleyforge.svg -o AppDir/volleyforge.png
-          cp AppDir/volleyforge.png AppDir/usr/share/icons/hicolor/256x256/apps/volleyforge.png
+          # Icon kopieren (aus Repo-Root)
+          cp icon.png AppDir/volleyforge.png
+          cp icon.png AppDir/usr/share/icons/hicolor/256x256/apps/volleyforge.png
 
           # AppRun Startskript
-          cat << 'EOF' > AppDir/AppRun
-#!/bin/sh
-HERE="$(dirname "$(readlink -f "${0}")")"
-export PATH="${HERE}/usr/bin:${PATH}"
-export LD_LIBRARY_PATH="${HERE}/usr/lib:${LD_LIBRARY_PATH}"
-cd "${HERE}"
-exec "${HERE}/usr/bin/volleyforge" "$@"
-EOF
+          printf '%s\n' \
+            '#!/bin/sh' \
+            'HERE="$(dirname "$(readlink -f "${0}")")"' \
+            'export PATH="${HERE}/usr/bin:${PATH}"' \
+            'export LD_LIBRARY_PATH="${HERE}/usr/lib:${LD_LIBRARY_PATH}"' \
+            'cd "${HERE}"' \
+            'exec "${HERE}/usr/bin/volleyforge" "$@"' \
+            > AppDir/AppRun
           chmod +x AppDir/AppRun
 
           # appimagetool herunterladen und AppImage erzeugen
