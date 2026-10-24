@@ -38,18 +38,6 @@ jobs:
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
 
-      - name: Ensure Assets
-        shell: pwsh
-        run: |
-          if (!(Test-Path "graph.pak")) {
-            Write-Host "Assets nicht gefunden. Lade Original-Assets von archive.org..."
-            Invoke-WebRequest -Uri "https://archive.org/download/blobbyvolley_202102/blobby.zip" -OutFile "blobby.zip"
-            Expand-Archive -Path "blobby.zip" -DestinationPath "blobby_extracted" -Force
-            Get-ChildItem -Path "blobby_extracted" -Recurse -Filter "*.pak" | Copy-Item -Destination "."
-            Remove-Item -Recurse -Force "blobby_extracted", "blobby.zip"
-          }
-          Get-ChildItem *.pak
-
       - name: Build Release
         run: cargo build --release
 
@@ -58,8 +46,6 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path "dist-win"
           Copy-Item "target/release/volleyforge.exe" "dist-win/"
-          # The game reads its containers from the folder of the executable.
-          Copy-Item "*.pak" "dist-win/"
           if (Test-Path "README.md") { Copy-Item "README.md" "dist-win/" }
           Compress-Archive -Path "dist-win/*" -DestinationPath "volleyforge-windows-x86_64.zip" -Force
 
@@ -69,7 +55,6 @@ jobs:
           name: volleyforge-windows-x86_64
           path: |
             target/release/volleyforge.exe
-            target/release/*.pak
             volleyforge-windows-x86_64.zip
 
   # =========================================================================
@@ -106,17 +91,6 @@ jobs:
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
 
-      - name: Ensure Assets
-        run: |
-          if [ ! -f "graph.pak" ]; then
-            echo "Assets nicht gefunden. Lade Original-Assets von archive.org..."
-            curl -fsSL -o /tmp/blobby.zip https://archive.org/download/blobbyvolley_202102/blobby.zip
-            unzip -q /tmp/blobby.zip -d /tmp/blobby_extracted
-            find /tmp/blobby_extracted -type f -iname "*.pak" -exec cp {} . \;
-            rm -rf /tmp/blobby.zip /tmp/blobby_extracted
-          fi
-          ls -la *.pak
-
       - name: Build Release
         run: cargo build --release
 
@@ -128,10 +102,6 @@ jobs:
 
           # Binary kopieren
           cp target/release/volleyforge AppDir/usr/bin/
-
-          # Die Container des Originals gehoeren neben das Binary - das Spiel
-          # liest sie aus dem Ordner der Datei.
-          cp *.pak AppDir/usr/bin/
 
           # Desktop-Entry erstellen
           printf '%s\n' \
