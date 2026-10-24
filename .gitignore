@@ -1,0 +1,19 @@
+/target
+/target-trace
+/tools
+/assets_dump
+/dist
+
+*.png
+!screenshots/*.png
+!screenshots/
+!icon.png
+
+# The original's containers. They are not part of the repository - copy them
+# from the original game next to the executable (or into the target folder).
+/graph.pak
+/sound.pak
+/text.pak
+
+# The log directory of the application.
+/logs
