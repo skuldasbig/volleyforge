@@ -30,7 +30,7 @@ jobs:
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -48,13 +48,14 @@ jobs:
           Copy-Item "target/release/volleyforge.exe" "dist-win/"
           if (Test-Path "README.md") { Copy-Item "README.md" "dist-win/" }
           Compress-Archive -Path "dist-win/*" -DestinationPath "volleyforge-windows-x86_64.zip" -Force
+          Copy-Item "target/release/volleyforge.exe" "volleyforge.exe"
 
       - name: Upload Windows Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: volleyforge-windows-x86_64
           path: |
-            target/release/volleyforge.exe
+            volleyforge.exe
             volleyforge-windows-x86_64.zip
 
   # =========================================================================
@@ -66,7 +67,7 @@ jobs:
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install System Dependencies
         run: |
@@ -139,7 +140,7 @@ jobs:
           chmod +x VolleyForge-x86_64.AppImage
 
       - name: Upload Linux Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: VolleyForge-Linux-x86_64
           path: VolleyForge-x86_64.AppImage
@@ -153,7 +154,7 @@ jobs:
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Rust & Wasm Target
         uses: dtolnay/rust-toolchain@stable
@@ -172,14 +173,14 @@ jobs:
         run: trunk build --release --public-url "./"
 
       - name: Upload Web Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: volleyforge-web
           path: dist/
 
       - name: Prepare Pages Artifact
         if: github.ref == 'refs/heads/main'
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: dist/
 
@@ -197,7 +198,7 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
 
   # =========================================================================
   # Optional: Automatische GitHub Release bei git-Tags (z. B. v0.1.0)
@@ -209,19 +210,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download Windows Artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: volleyforge-windows-x86_64
           path: release-assets/windows
 
       - name: Download Linux Artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: VolleyForge-Linux-x86_64
           path: release-assets/linux
 
       - name: Download Web Artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: volleyforge-web
           path: release-assets/web
@@ -232,7 +233,7 @@ jobs:
           zip -r ../volleyforge-web.zip .
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             release-assets/windows/volleyforge.exe
