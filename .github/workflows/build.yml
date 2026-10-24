@@ -22,11 +22,24 @@ concurrency:
 
 jobs:
   # =========================================================================
-  # Windows: Erstellt volleyforge.exe & ZIP-Paket
+  # Windows: Erstellt x86_64, x86 (32-Bit) & ARM64 (.exe & .zip)
   # =========================================================================
   build-windows:
-    name: Windows x86_64 (.exe)
+    name: Windows (${{ matrix.name }})
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            arch: x86_64
+            name: x86_64
+          - target: i686-pc-windows-msvc
+            arch: x86
+            name: x86 (32-Bit)
+          - target: aarch64-pc-windows-msvc
+            arch: arm64
+            name: ARM64
 
     steps:
       - name: Checkout Code
@@ -34,35 +47,39 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
 
       - name: Build Release
-        run: cargo build --release
+        run: cargo build --release --target ${{ matrix.target }}
 
       - name: Prepare Windows Package
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path "dist-win"
-          Copy-Item "target/release/volleyforge.exe" "dist-win/"
-          if (Test-Path "README.md") { Copy-Item "README.md" "dist-win/" }
-          Compress-Archive -Path "dist-win/*" -DestinationPath "volleyforge-windows-x86_64.zip" -Force
-          Copy-Item "target/release/volleyforge.exe" "volleyforge.exe"
+          New-Item -ItemType Directory -Force -Path "dist-win-${{ matrix.arch }}"
+          Copy-Item "target/${{ matrix.target }}/release/volleyforge.exe" "dist-win-${{ matrix.arch }}/"
+          if (Test-Path "README.md") { Copy-Item "README.md" "dist-win-${{ matrix.arch }}/" }
+          Compress-Archive -Path "dist-win-${{ matrix.arch }}/*" -DestinationPath "volleyforge-windows-${{ matrix.arch }}.zip" -Force
+          Copy-Item "target/${{ matrix.target }}/release/volleyforge.exe" "volleyforge-windows-${{ matrix.arch }}.exe"
 
       - name: Upload Windows Artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: volleyforge-windows-x86_64
+          name: volleyforge-windows-${{ matrix.arch }}
           path: |
-            volleyforge.exe
-            volleyforge-windows-x86_64.zip
+            volleyforge-windows-${{ matrix.arch }}.exe
+            volleyforge-windows-${{ matrix.arch }}.zip
 
   # =========================================================================
-  # Linux: Erstellt vollwertiges Linux AppImage
+  # Linux x86_64: Erstellt vollwertiges Linux AppImage & Tarball
   # =========================================================================
-  build-linux:
-    name: Linux x86_64 (AppImage)
+  build-linux-x86_64:
+    name: Linux x86_64 (AppImage & Tarball)
     runs-on: ubuntu-22.04
 
     steps:
@@ -95,7 +112,7 @@ jobs:
       - name: Build Release
         run: cargo build --release
 
-      - name: Create AppImage
+      - name: Create Packages
         run: |
           mkdir -p AppDir/usr/bin
           mkdir -p AppDir/usr/share/applications
@@ -139,11 +156,208 @@ jobs:
           ARCH=x86_64 ./squashfs-root/AppRun AppDir VolleyForge-x86_64.AppImage
           chmod +x VolleyForge-x86_64.AppImage
 
-      - name: Upload Linux Artifact
+          # Standalone-Tarball fuer Systeme ohne FUSE erzeugen
+          tar -czf volleyforge-linux-x86_64.tar.gz -C target/release volleyforge
+
+      - name: Upload Linux x86_64 Artifacts
         uses: actions/upload-artifact@v7
         with:
           name: VolleyForge-Linux-x86_64
-          path: VolleyForge-x86_64.AppImage
+          path: |
+            VolleyForge-x86_64.AppImage
+            volleyforge-linux-x86_64.tar.gz
+
+  # =========================================================================
+  # Linux ARM64: Erstellt AppImage & Tarball fuer Raspberry Pi & ARM64 Linux
+  # =========================================================================
+  build-linux-arm64:
+    name: Linux ARM64 (AppImage & Tarball)
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v7
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev \
+            libx11-dev \
+            libxcursor-dev \
+            libxrandr-dev \
+            libxi-dev \
+            libxinerama-dev \
+            libgl1-mesa-dev \
+            libwayland-dev \
+            libxkbcommon-dev \
+            pkg-config \
+            wget \
+            file
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build Release
+        run: cargo build --release
+
+      - name: Create Packages
+        run: |
+          mkdir -p AppDir/usr/bin
+          mkdir -p AppDir/usr/share/applications
+          mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
+
+          # Binary kopieren
+          cp target/release/volleyforge AppDir/usr/bin/
+
+          # Desktop-Entry erstellen
+          printf '%s\n' \
+            '[Desktop Entry]' \
+            'Type=Application' \
+            'Name=VolleyForge' \
+            'Comment=Authentic 1:1 Blobby Volley Reimplementation' \
+            'Exec=volleyforge' \
+            'Icon=volleyforge' \
+            'Categories=Game;ArcadeGame;' \
+            'Terminal=false' \
+            > AppDir/volleyforge.desktop
+          cp AppDir/volleyforge.desktop AppDir/usr/share/applications/volleyforge.desktop
+
+          # Icon kopieren (aus Repo-Root)
+          cp icon.png AppDir/volleyforge.png
+          cp icon.png AppDir/usr/share/icons/hicolor/256x256/apps/volleyforge.png
+
+          # AppRun Startskript
+          printf '%s\n' \
+            '#!/bin/sh' \
+            'HERE="$(dirname "$(readlink -f "${0}")")"' \
+            'export PATH="${HERE}/usr/bin:${PATH}"' \
+            'export LD_LIBRARY_PATH="${HERE}/usr/lib:${LD_LIBRARY_PATH}"' \
+            'cd "${HERE}"' \
+            'exec "${HERE}/usr/bin/volleyforge" "$@"' \
+            > AppDir/AppRun
+          chmod +x AppDir/AppRun
+
+          # ARM64 appimagetool herunterladen und AppImage erzeugen
+          wget -q https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-aarch64.AppImage -O appimagetool
+          chmod +x appimagetool
+          ./appimagetool --appimage-extract
+          ARCH=aarch64 ./squashfs-root/AppRun AppDir VolleyForge-aarch64.AppImage
+          chmod +x VolleyForge-aarch64.AppImage
+
+          # Standalone-Tarball fuer Raspberry Pi / ARM-Distros
+          tar -czf volleyforge-linux-aarch64.tar.gz -C target/release volleyforge
+
+      - name: Upload Linux ARM64 Artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: VolleyForge-Linux-aarch64
+          path: |
+            VolleyForge-aarch64.AppImage
+            volleyforge-linux-aarch64.tar.gz
+
+  # =========================================================================
+  # macOS: Universal Binary (.app, .dmg, .zip) fuer Apple Silicon & Intel
+  # =========================================================================
+  build-macos:
+    name: macOS Universal (.dmg & .zip)
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v7
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build Apple Silicon (ARM64)
+        run: cargo build --release --target aarch64-apple-darwin
+
+      - name: Build Intel (x86_64)
+        run: cargo build --release --target x86_64-apple-darwin
+
+      - name: Create App Bundle & DMG
+        run: |
+          mkdir -p "VolleyForge.app/Contents/MacOS"
+          mkdir -p "VolleyForge.app/Contents/Resources"
+
+          # Universal Binary per lipo zusammenfuegen
+          lipo -create \
+            target/aarch64-apple-darwin/release/volleyforge \
+            target/x86_64-apple-darwin/release/volleyforge \
+            -output "VolleyForge.app/Contents/MacOS/volleyforge"
+          chmod +x "VolleyForge.app/Contents/MacOS/volleyforge"
+
+          # Info.plist schreiben
+          cat << 'EOF' > "VolleyForge.app/Contents/Info.plist"
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleExecutable</key>
+              <string>volleyforge</string>
+              <key>CFBundleIdentifier</key>
+              <string>com.volleyforge.app</string>
+              <key>CFBundleName</key>
+              <string>VolleyForge</string>
+              <key>CFBundleDisplayName</key>
+              <string>VolleyForge</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleShortVersionString</key>
+              <string>0.1.1</string>
+              <key>CFBundleVersion</key>
+              <string>0.1.1</string>
+              <key>CFBundleIconFile</key>
+              <string>AppIcon</string>
+              <key>LSMinimumSystemVersion</key>
+              <string>11.0</string>
+              <key>NSHighResolutionCapable</key>
+              <true/>
+          </dict>
+          </plist>
+          EOF
+
+          # AppIcon (.icns) aus icon.png erzeugen
+          if [ -f icon.png ]; then
+            mkdir -p VolleyForge.iconset
+            sips -z 16 16     icon.png --out VolleyForge.iconset/icon_16x16.png
+            sips -z 32 32     icon.png --out VolleyForge.iconset/icon_16x16@2x.png
+            sips -z 32 32     icon.png --out VolleyForge.iconset/icon_32x32.png
+            sips -z 64 64     icon.png --out VolleyForge.iconset/icon_32x32@2x.png
+            sips -z 128 128   icon.png --out VolleyForge.iconset/icon_128x128.png
+            sips -z 256 256   icon.png --out VolleyForge.iconset/icon_128x128@2x.png
+            sips -z 256 256   icon.png --out VolleyForge.iconset/icon_256x256.png
+            sips -z 512 512   icon.png --out VolleyForge.iconset/icon_256x256@2x.png
+            sips -z 512 512   icon.png --out VolleyForge.iconset/icon_512x512.png
+            iconutil -c icns VolleyForge.iconset -o "VolleyForge.app/Contents/Resources/AppIcon.icns"
+            rm -rf VolleyForge.iconset
+          fi
+
+          # DMG erzeugen
+          mkdir -p dmg_root
+          cp -R VolleyForge.app dmg_root/
+          ln -s /Applications dmg_root/Applications
+          hdiutil create -volname "VolleyForge" -srcfolder dmg_root -ov -format UDZO VolleyForge-macOS-Universal.dmg
+
+          # ZIP erzeugen
+          zip -r VolleyForge-macOS-Universal.zip VolleyForge.app
+
+      - name: Upload macOS Artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: volleyforge-macos-universal
+          path: |
+            VolleyForge-macOS-Universal.dmg
+            VolleyForge-macOS-Universal.zip
 
   # =========================================================================
   # Web: Erstellt WebAssembly Build mit Trunk
@@ -201,25 +415,49 @@ jobs:
         uses: actions/deploy-pages@v5
 
   # =========================================================================
-  # Optional: Automatische GitHub Release bei git-Tags (z. B. v0.1.0)
+  # Automatische GitHub Release bei git-Tags (z. B. v0.1.1)
   # =========================================================================
   release:
     name: Publish GitHub Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build-windows, build-linux, build-web]
+    needs: [build-windows, build-linux-x86_64, build-linux-arm64, build-macos, build-web]
     runs-on: ubuntu-latest
     steps:
-      - name: Download Windows Artifacts
+      - name: Download Windows x86_64 Artifact
         uses: actions/download-artifact@v8
         with:
           name: volleyforge-windows-x86_64
-          path: release-assets/windows
+          path: release-assets/windows-x86_64
 
-      - name: Download Linux Artifact
+      - name: Download Windows x86 Artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: volleyforge-windows-x86
+          path: release-assets/windows-x86
+
+      - name: Download Windows ARM64 Artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: volleyforge-windows-arm64
+          path: release-assets/windows-arm64
+
+      - name: Download Linux x86_64 Artifacts
         uses: actions/download-artifact@v8
         with:
           name: VolleyForge-Linux-x86_64
-          path: release-assets/linux
+          path: release-assets/linux-x86_64
+
+      - name: Download Linux ARM64 Artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: VolleyForge-Linux-aarch64
+          path: release-assets/linux-arm64
+
+      - name: Download macOS Artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: volleyforge-macos-universal
+          path: release-assets/macos
 
       - name: Download Web Artifact
         uses: actions/download-artifact@v8
@@ -236,9 +474,9 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           files: |
-            release-assets/windows/volleyforge.exe
-            release-assets/windows/volleyforge-windows-x86_64.zip
-            release-assets/linux/VolleyForge-x86_64.AppImage
+            release-assets/windows-*/*
+            release-assets/linux-*/*
+            release-assets/macos/*
             release-assets/volleyforge-web.zip
           draft: false
           prerelease: false

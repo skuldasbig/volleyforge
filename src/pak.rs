@@ -667,9 +667,25 @@ impl Assets {
 /// lie next to the program - the desktop version reads them from there, the
 /// web version has them compiled into the wasm module.
 pub fn default_dir() -> PathBuf {
-    std::env::current_exe()
+    let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-        .unwrap_or_else(|| PathBuf::from("."))
+        .unwrap_or_else(|| PathBuf::from("."));
+
+    if exe_dir.join("graph.pak").exists() {
+        return exe_dir;
+    }
+
+    let resources = exe_dir.join("../Resources");
+    if resources.join("graph.pak").exists() {
+        return resources;
+    }
+
+    let cwd = PathBuf::from(".");
+    if cwd.join("graph.pak").exists() {
+        return cwd;
+    }
+
+    exe_dir
 }
 

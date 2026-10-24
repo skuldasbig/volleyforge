@@ -56,7 +56,7 @@ Das Originalspiel samt Assets ist auf [archive.org](https://archive.org/) archiv
 > 👉 **[https://skuldasbig.github.io/volleyforge/](https://skuldasbig.github.io/volleyforge/)**  
 > *(Beim ersten Aufruf einfach `blobby.zip` oder die drei `.pak`-Dateien per Drag & Drop ins Browserfenster ziehen – fertig!)*  
 >  
-> 💡 **Desktop-Downloads:** Unter **Releases** findest du fertige Windows-Builds (`.exe`) sowie portable Linux-Pakete (`.AppImage`).
+> 💡 **Desktop-Downloads:** Unter **Releases** findest du fertige Pakete für alle gängigen Plattformen: **Windows** (x86_64, 32-Bit x86, ARM64 als `.exe` & `.zip`), **macOS** (Universal `.dmg` & `.zip` für Apple Silicon & Intel) sowie **Linux** (`.AppImage` & `.tar.gz` für x86_64 und ARM64 / Raspberry Pi).
 
 Du kannst VolleyForge auf zwei einfache Arten mit den Assets versorgen:
 
