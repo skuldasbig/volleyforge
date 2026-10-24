@@ -104,6 +104,11 @@ Die Steuerung entspricht exakt dem gewohnten Original:
 
 ## 🌐 Netzwerkpartie
 
+> ⛔ **Nur in der Desktop-Version.** In der **Web-Version gibt es keine
+> Netzwerkpartien** — der Browser kann keine UDP-Sockets öffnen. Dort bleibt
+> der Menüpunkt „NETZWERK-SPIEL" ausgegraut, genau wie im Original ohne
+> DirectPlay.
+
 Das Original spielte 2001 mit **DirectPlay 4** — diese Bibliothek gibt es
 nicht mehr. VolleyForge spricht deshalb **rohes UDP** und bildet das
 Datenpaket des Originals **byteweise** nach. Zwei Rechner im selben LAN
@@ -141,11 +146,9 @@ genügen.
   schickt nur seine eigene Eingabe (links/rechts/Sprung). Das ist ein
   **State-Sync**, kein Lockstep — genau wie 2001.
 * **Grenzen:** LAN only (kein NAT-Traversierung, also nicht über Router
-  hinweg), nicht im Browser. Unter Windows fragt die Firewall beim ersten
-  Mal nach der Freigabe von **UDP 24680**.
-
-> 💡 Die Browser-Version hat keinen UDP-Socket — dort bleibt der Menüpunkt
-> wie im Original ohne DirectPlay ausgegraut.
+  hinweg) und **nur in der Desktop-Version** — die Web-Version kann kein
+  UDP. Unter Windows fragt die Firewall beim ersten Mal nach der Freigabe
+  von **UDP 24680**.
 
 ---
 

@@ -94,6 +94,12 @@ den vollen Zustand, der Gast spiegelt und schickt nur seine drei
 Eingabeflags** — kein Lockstep. Belege: `../WISSENSSTAND.md` 0.12.
 Prüfen: `cargo run -- --nettest`.
 
+**Nur in der Desktop-Version:** Der Browser kann keine UDP-Sockets öffnen.
+Darum ist der Menüpunkt in der Web-Version ausgegraut
+(`assets::NETWORK_AVAILABLE = !cfg!(target_arch = "wasm32")`) — genau wie im
+Original ohne DirectPlay. Die Netzwerkpartien gibt es **nur** in der
+Desktop-Version.
+
 **Ein Canvas für alles** (KONZEKT 2.1): Menü *und* Spiel rendern in dieselbe
 800×600-Fläche, die als Textur in egui geladen wird. Nur so greifen
 Originalfont, Nachtmodus und das Original-Layout überall.

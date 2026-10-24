@@ -778,6 +778,7 @@ impl eframe::App for VolleyForge {
             Phase::Playing => {}
         }
 
+        self.net_tick();
         self.advance_time();
 
         let available = ui.available_size();
