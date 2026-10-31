@@ -7,12 +7,10 @@ edition = "2024"
 eframe = { version = "0.37.0", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
 egui = "0.37.0"
 image = { version = "0.25.10", default-features = false, features = ["png"] }
+kira = { version = "0.12", default-features = false, features = ["cpal", "wav", "pcm"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["fmt", "ansi", "env-filter", "chrono"] }
 web-time = "1.1"
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-rodio = { version = "0.20", default-features = false, features = ["wav"] }
 
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1"
@@ -26,7 +24,6 @@ web-sys = { version = "0.3", features = [
     "Document",
     "Element",
     "HtmlCanvasElement",
-    "HtmlAudioElement",
     "Storage",
     "HtmlInputElement",
     "FileReader",

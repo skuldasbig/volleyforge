@@ -17,3 +17,6 @@
 
 # The log directory of the application.
 /logs
+
+# Local developer configuration
+/.cargo
